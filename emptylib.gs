@@ -1,5 +1,5 @@
 include "core.gs"
-include "ttte_online.gs" //<kuid:414976:102858> TTTELocomotive Online Library
+include "online.gs"
 
 class tttelib isclass Library
 {
