@@ -1,7 +1,7 @@
 include "core.gs"
 include "online.gs"
 
-class tttelib isclass Library
+class emptylib isclass Library
 {
   OnlineAccess OA;
   TTTEOnline onlineLibrary;
@@ -10,8 +10,6 @@ class tttelib isclass Library
   {
     inherited(asset);
     onlineLibrary = cast<TTTEOnline>World.GetLibrary(asset.LookupKUIDTable("onlinelibrary"));
-    
-    //OA = GetOnlineAccess();
   }
 
   public TTTEOnline GetOnlineLibrary()
