@@ -5,7 +5,7 @@ include "orientation.gs"
 include "multiplayergame.gs"
 include "trainzassetsearch.gs"
 include "soup.gs"
-include "emptylib.gs"
+include "tttelib.gs"
 
 class LocoCore isclass Locomotive
 {
@@ -66,7 +66,7 @@ class LocoCore isclass Locomotive
   Asset[] ExtraLampAssets;
   
   //Хранит текущее состояние буферных фонарей
-  int m_headCode;  
+  int m_buferlights;  
 
   int SupportedFeatureset = 0;
   int SupportedHeadcode = 0;
@@ -592,7 +592,7 @@ float fast_sin(float in_x)
 			{
 				//Этот поток будет упаковывать данные и отправлять их на сервер для чтения.
 				Soup senddata = Constructors.NewSoup();
-				senddata.SetNamedTag("headcode",m_headCode);
+				senddata.SetNamedTag("headcode",m_buferlights);
 				senddata.SetNamedTag("id",me.GetGameObjectID());
 				MultiplayerGame.BroadcastGameplayMessage("TTTELocomotiveMP", "update", senddata);
 			}
@@ -617,10 +617,10 @@ float fast_sin(float in_x)
 
   // ============================================================================
   // Name: MPUpdate()
-  // Desc: Client side MP information handler.
+  // Desc: Обновление данных на клиентской части
   // ============================================================================
 
-	//receives and handles multiplayer messages
+	//Передаёт и фиксирует сообщения мультиплеера
 	public void MPUpdate(Message msg)
 	{
 		Soup ReceivedData = msg.paramSoup;
@@ -631,10 +631,10 @@ float fast_sin(float in_x)
 			Interface.Print("Data Confirmed!");
       int Rheadcode = ReceivedData.GetNamedTagAsInt("headcode");
 
-      if(m_headCode != Rheadcode)
+      if(m_buferlights != Rheadcode)
       {
-        m_headCode = Rheadcode;
-        ConfigureHeadcodeLamps(m_headCode);
+        m_buferlights = Rheadcode;
+        ConfigureHeadcodeLamps(m_buferlights);
       }
 
 			//bool Rwheesh = ReceivedData.GetNamedTagAsBool("wheesh");
@@ -650,4 +650,3 @@ float fast_sin(float in_x)
 
 	
 };
-
