@@ -5,7 +5,7 @@ include "orientation.gs"
 include "multiplayergame.gs"
 include "trainzassetsearch.gs"
 include "soup.gs"
-include "tttelib.gs"
+include "emptylib.gs"
 
 class LocoCore isclass Locomotive
 {
