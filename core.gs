@@ -1,652 +1,332 @@
+include "gs.gs"
+include "common.gs"
 include "locomotive.gs"
-include	"meshobject.gs"
-include "interface.gs"
-include "orientation.gs"
+include "world.gs"
+include "Soup.gs"
 include "multiplayergame.gs"
-include "trainzassetsearch.gs"
-include "soup.gs"
-include "tttelib.gs"
 
-class LocoCore isclass Locomotive
+class DieselLocomotive isclass Locomotive
 {
-	tttelib TTTELocoLibrary;
-	TTTEOnline onlineLibrary;
-	Browser browser;
-	Train train;
 	
-	
-	int DetermineCarPosition(void);
-	void SniffMyTrain(void);
-	void ConfigureHeadcodeLamps(int headcode);
-	void SetNamedFloatFromExisting(Soup in, Soup out, string tagName);
-	thread void MultiplayerBroadcast(void);
-	bool SoupHasTag(Soup testSoup, string tagName);
-	TTTEOnline GetOnlineLibrary();
-	
-	Asset headlight_asset;               // headlight asset used by the loco
-	Asset rear_headlight_asset;          // Backup headlight (not sure if we want this)
-	Asset driver, fireman;               // fireman and driver meshes
-	Asset ScriptAsset;
-    StringTable strTable;
-	Bogey[] myBogies; // Массив телег из конфига
-	
-  //Периодичность синхронизации действий в МП
-  define float MP_UpdatePeriod = 0.1;
-	
-  //Побитовые флаги
-  define int HEADCODE_BL = 1;
-  define int HEADCODE_BC = 2;
-  define int HEADCODE_BR = 4;
-  define int HEADCODE_TC = 8;
-  define int HEADCODE_NONE = 0;
-  define int HEADCODE_ALL_LAMPS = HEADCODE_BL | HEADCODE_BC | HEADCODE_BR | HEADCODE_TC;
-  define int HEADCODE_TAIL_LIGHTS = HEADCODE_BL | HEADCODE_BR;
-  define int HEADCODE_BRANCH = HEADCODE_BL;
-  define int HEADCODE_EXPRESS = HEADCODE_BL | HEADCODE_BR;
-  define int HEADCODE_EXPRESS_FREIGHT = HEADCODE_TC | HEADCODE_BR;
-  define int HEADCODE_EXPRESS_FREIGHT_2 = HEADCODE_BC | HEADCODE_BL;
-  define int HEADCODE_EXPRESS_FREIGHT_3 = HEADCODE_TC | HEADCODE_BL;
-  define int HEADCODE_GOODS = HEADCODE_BC | HEADCODE_BR;
-  define int HEADCODE_LIGHT = HEADCODE_TC;
-  define int HEADCODE_THROUGH_FREIGHT = HEADCODE_TC | HEADCODE_BC;
-  define int HEADCODE_TVS = HEADCODE_BR;
-  
-  define int FEATURE_LAMPS        = 1 << 1;
-  define int FEATURE_SMOKE        = 1 << 4;
-  
-  //Супы
-  Soup myConfig;
-  Soup ExtensionsContainer;
-  Soup BogeyLiveryTextureOptions;
-  Soup SmokeboxContainer;
-  Soup ExtraLampsContainer;
-  Soup SmokeEdits;
-  
-  bool[] ExtraLampVisibility;
-  Asset[] ExtraLampAssets;
-  
-  //Хранит текущее состояние буферных фонарей
-  int m_buferlights;  
+Vehicle inFront;
+Vehicle inBack;
+Asset SA3_coupled, SA3_uncouped;
 
-  int SupportedFeatureset = 0;
-  int SupportedHeadcode = 0;
-  
-  public bool Compressor_run;
+public bool Reverser;//Встал ли реверс
+public float Tyaga;
+public float RPM; //Обороты в минуту
+public int Idle_RPM; //Холостые обороты дизеля (0% тяги)
+public int Nominal_RPM; //Номинальные обороты дизеля (100% тяги)
+public int Fuel_consumption; //Расход топлива при макс.мощности
+public bool Gen_wire; //Провод от генератора для запитывания цепи
+public int DieselState; //Переменная состояния дизеля
 
-  public define int CAR_DERAILED = -1;
-  public define int CAR_CENTER   =  0;
-  public define int CAR_FRONT    =  1;
-  public define int CAR_BACK     =  2;
-  public define int CAR_SINGLE   =  3; // CAR_FRONT + CAR_BACK == CAR_SINGLE. Yes, this is intentional.
+public float EngineMinOilPressure; //минимально допустимое давление масла при пуске дизеля, Атм
+public float EngineNomOilPressure; //номинальное давление масла дизеля на холостых оборотах, Атм
+public float EngineMaxOilPressure; //максимальное давление масла дизеля (на номинальных оборотах), Атм
 
-  int m_carPosition; // position of car in train - one of the options above
+public float GMPMinOilPressure; //номинальное давление масла ГМП на холостом ходу, Атм
+public float GMPNomOilPressure; //номинальное давление масла ГМП без нагрузки (при движении накатом, тяговое усилие ноль), Атм
+public float GMPMaxOilPressure; //давление, которое вызовет поломку лопаток аппаратов ГМП, Атм
 
-  //Математика
-  float ApproxAtan2(float y, float x);
-  WorldCoordinate RotatePoint(WorldCoordinate point, float rotateangle);
-  Orientation LookAt(WorldCoordinate A, WorldCoordinate B);
-  Orientation DeltaRot(Orientation From, Orientation To);
-  float rad_range(float in_x);
-  float clamp(float x, float lower, float upper);
-  
-  //Побитовые утилиты
-  bool FlagTest(int flags, int mask)
-  {
-    return flags == mask;
-  }
+float starter_timer;
 
-  void SetFeatureSupported(int feature)
-  {
-    SupportedFeatureset = SupportedFeatureset | feature;
-  }
+public float MinTemp,WaterTemp,OilTemp,WaterTempLeftRight,OilPress,OilTempLeftRight,OilPressLeftRight,OilPressGMP,OilTempGMP,OilPressStep,OilPressGMPStep;
+float[] Reltoki = new float[80];
 
-  void SetHeadcodeSupported(int flag)
-  {
-    SupportedHeadcode = SupportedHeadcode | flag;
-  }
-
-  bool GetFeatureSupported(int features)
-  {
-    return (SupportedFeatureset & features) == features;
-  }
-
-  bool GetHeadcodeSupported(int flags)
-  {
-    return (SupportedHeadcode & flags) == flags;
-  }
-
-  // ============================================================================
-  // Name: Init()
-  // Desc: The Init function is called when the object is created
-  // ============================================================================
-  public void Init(Asset asset) // Let's keep the init at the top for ease of access
-  {
-    inherited(asset);
-    TTTELocoLibrary = cast<tttelib>World.GetLibrary(asset.LookupKUIDTable("LocoCore"));
-    ScriptAsset = World.GetLibrary(asset.LookupKUIDTable("LocoCore")).GetAsset();
-    myConfig = asset.GetConfigSoup();
-    ExtensionsContainer = asset.GetConfigSoup().GetNamedSoup("extensions");
-
-    // ****************************************************************************/
-   // Grab assets from the Locomotive
-   // ****************************************************************************/
-  strTable = ScriptAsset.GetStringTable(); // String table to be used for obtaining information inside the Config
-
-  myBogies = me.GetBogeyList(); // Grab all of the bogies on the locomotive, specifically for swapping texture purposes.
-
-  ExtraLampsContainer = ExtensionsContainer.GetNamedSoup("extra-lamps");
-  BogeyLiveryTextureOptions = ExtensionsContainer.GetNamedSoup("bogey-livery-textures");
-
-  //check lamp support, a bit hacky
-  Soup MeshTable = myConfig.GetNamedSoup("mesh-table");
-  int i;
-  for(i = 0; i < MeshTable.CountTags(); i++)
-  {
-    Soup mesh = MeshTable.GetNamedSoup(MeshTable.GetIndexedTagName(i));
-    Soup effects = mesh.GetNamedSoup("effects");
-    int j;
-    for(j = 0; j < effects.CountTags(); j++)
-    {
-      string effect = effects.GetIndexedTagName(j);
-      if(effect == "lamp_tc") SetHeadcodeSupported(HEADCODE_TC);
-      else if (effect == "lamp_bl") SetHeadcodeSupported(HEADCODE_BL);
-      else if (effect == "lamp_bc") SetHeadcodeSupported(HEADCODE_BC);
-      else if (effect == "lamp_br") SetHeadcodeSupported(HEADCODE_BR);
-    }
-  }
-  if(SupportedHeadcode != 0 or ExtraLampsContainer.CountTags()) SetFeatureSupported(FEATURE_LAMPS);
-
-  //liverytextureoptions defines the texture autofill behavior
-  //SUPPORTED OPTIONS: none, diffusenormal, pbrstandard
-
-  //set initial extra lamp states to none
-  if(ExtraLampsContainer)
-  {
-    int TagCount = ExtraLampsContainer.CountTags();
-    ExtraLampAssets = new Asset[TagCount];
-    ExtraLampVisibility = new bool[TagCount];
-    //int i;
-    for(i = 0; i < TagCount; i++)
-    {
-      string effectName = ExtraLampsContainer.GetIndexedTagName(i);
-      MeshObject lampMesh = GetFXAttachment(effectName);
-      ExtraLampVisibility[i] = false;
-      if(lampMesh)
-      {
-        ExtraLampAssets[i] = lampMesh.GetAsset();
-        SetFXAttachment(effectName, null);
-      }
-      else
-        ExtraLampAssets[i] = null;
-    }
-  }
-
-  SmokeboxContainer = ExtensionsContainer.GetNamedSoup("smokeboxes");
-
-  SmokeEdits = Constructors.NewSoup();
-  int ParticleCount = 0;
-  int curTag;
-  for(curTag = 0; curTag < myConfig.CountTags(); curTag++)
-  {
-    string tagName = myConfig.GetIndexedTagName(curTag);
-    if(TrainUtil.HasPrefix(tagName, "smoke"))
-    {
-      SetFeatureSupported(FEATURE_SMOKE);
-      Soup curSmoke = myConfig.GetNamedSoup(tagName);
-
-      Soup NewContainer = Constructors.NewSoup();
-      NewContainer.SetNamedTag("active", false); //whether to override
-      NewContainer.SetNamedTag("expanded", false);
-      SetNamedFloatFromExisting(curSmoke, NewContainer, "rate");
-      SetNamedFloatFromExisting(curSmoke, NewContainer, "velocity");
-      SetNamedFloatFromExisting(curSmoke, NewContainer, "lifetime");
-      SetNamedFloatFromExisting(curSmoke, NewContainer, "minsize");
-      SetNamedFloatFromExisting(curSmoke, NewContainer, "maxsize");
-
-      //TrainzScript.Log(NewContainer.AsString());
-      SmokeEdits.SetNamedSoup((string)ParticleCount, NewContainer);
-      ParticleCount++;
-    }
-  }
-
-
-  AddHandler(me, "Interface", "LayoutChanged", "UpdateInterfacePositionHandler");
-
-  //Multiplayer Message! Important!
-  AddHandler(me, "TTTELocomotiveMP", "update", "MPUpdate");
-
-  if(MultiplayerGame.IsActive()){
-    MultiplayerBroadcast();
-  }
-
-  // ****************************************************************************/
- // Define Camera Handlers for hiding/showing the low poly exterior cab on steam locos.
- // ****************************************************************************/
-  AddHandler(Interface, "Camera", "Internal-View", "CameraInternalViewHandler");
-  AddHandler(Interface, "Camera", "External-View", "CameraInternalViewHandler");
-  AddHandler(Interface, "Camera", "Tracking-View", "CameraInternalViewHandler");
-  AddHandler(Interface, "Camera", "Roaming-View", "CameraInternalViewHandler");
-  AddHandler(Interface, "Camera", "Target-Changed", "CameraTargetChangedHandler");
-
-
-  //create the browser menu - this could be changed later to link to a pantograph or keybind
- // createMenuWindow();
- // ScanBrowser();
- // BrowserThread();
-
-  Soup KUIDTable = myConfig.GetNamedSoup("kuid-table");
-
-  if(SoupHasTag(KUIDTable, "lamp")) headlight_asset = GetAsset().FindAsset("lamp");
-  m_carPosition = DetermineCarPosition();
-
-
-   // message handlers for ACS entry points and tail lights
-  AddHandler(me, "Vehicle", "Coupled", "VehicleCoupleHandler");
-  AddHandler(me, "Vehicle", "Decoupled", "VehicleDecoupleHandler");
-  AddHandler(me, "Vehicle", "Derailed", "VehicleDerailHandler");
-  // lashed on as it happens to do the right thing
-  AddHandler(me, "World", "ModuleInit", "VehicleDecoupleHandler");
-  AddHandler(me, "World", "ModuleInit", "ModuleInitHandler");
-
-  // ACS callback handler
-  AddHandler(me, "ACScallback", "", "ACShandler");
-
-  // headcode / reporting number handler
-
-  // handler necessary for tail lights
-  AddHandler(me, "Train", "Turnaround", "TrainTurnaroundHandler");
-
-  // Handler for Secondary Whistle PFX
-  // AddHandler(me.GetMyTrain(), "Train", "NotifyHorn", "WhistleMonitor");
-
-  //listen for user change messages in the online group
-  //although this message is sent to OnlineGroup objects, it is forwarded to the online group library through Sniff
-  if(GetOnlineLibrary())
-  {
-    AddHandler(GetOnlineLibrary(), "TTTEOnline", "UsersChange", "UsersChangeHandler");
-  }
-
-	train = me.GetMyTrain(); // Get the train
-	SniffMyTrain(); // Then sniff it
-
-  }
-
-  // ============================================================================
-  // Name: SetNamedFloatFromExisting()
-  // Desc: Utility for copying soups.
-  // ============================================================================
-  void SetNamedFloatFromExisting(Soup in, Soup out, string tagName)
-  {
-    if(in.GetIndexForNamedTag(tagName) != -1) out.SetNamedTag(tagName, Str.UnpackFloat(in.GetNamedTag(tagName)));
-  }
-
-  // ============================================================================
-  // Name: SoupHasTag()
-  // Desc: Determine if a Soup contains a tag.
-  // ============================================================================
-  bool SoupHasTag(Soup testSoup, string tagName)
-  {
-    if(testSoup.GetIndexForNamedTag(tagName) == -1)
-    {
-      return false;
-    }
-    //return false if it doesnt exist, otherwise return true
-    return true;
-  }
-
-  // ============================================================================
-  // Name: DetermineCarPosition()
-  // Desc: Определяет нашу позицию в этом составе
-  // ============================================================================
-  int DetermineCarPosition()
-  {
-    //Interface.Print("I entered Determine Car position");
-
-    Train consist;
-    Vehicle[] cars;
-    int rval = CAR_CENTER;
-
-    consist = GetMyTrain();
-    cars = consist.GetVehicles();
-    if (me == cars[0])
-    {
-      rval = rval + CAR_FRONT;
-    }
-    if (me == cars[cars.size() - 1])
-    {
-      rval = rval + CAR_BACK;
-    }
-    return rval;
-  }
-  
-  // ============================================================================
-  // Name: Compressor()
-  // Desc: Логика работы компрессора
-  // ============================================================================
- public void Compressor(bool CS_W)
+float sin(float x)
 {
-	while(CS_W)
+	int a= (int)(x/(2*Math.PI));
+	x=x-2*a*Math.PI;
+	a=1;
+	if(Math.PI<x and x<=2*Math.PI)
 	{
-		if (!Compressor_run and me.GetEngineParam("main-reservoir-pressure") < 750)
+		x=x-Math.PI;
+		a=-a;
+	}
+	if(Math.PI/2<x and x<=Math.PI)
+	{
+		x=Math.PI-x;
+	}
+	return a*(x-x*x*x/6+x*x*x*x*x/120-x*x*x*x*x*x*x/5040+x*x*x*x*x*x*x*x*x/362880);
+}
+
+public void Setup (Message msg)
+{
+	float Season = World.GetGameSeason();
+	if (0.125 <= Season < 0.375)
+		MinTemp = 20;          //Осень
+	else if (0.375 <= Season < 0.625)
+		MinTemp = 8;        //Зима	
+	else if (0.625 <= Season)
+		MinTemp = 20;          //Весна	
+	else if (Season < 0.125)
+		MinTemp = 30;         //Лето	
+	
+	WaterTemp = MinTemp + Math.Rand(-5,40);  //Вода дизеля
+	OilTemp = MinTemp + Math.Rand(-8,50);	 //Масло дизеля
+	OilPress = EngineMinOilPressure + Math.Rand(-1*EngineMinOilPressure, 2);
+	WaterTempLeftRight = Math.Rand(-5,3);    //Перекос температуры воды по моноблокам
+	OilTempLeftRight = Math.Rand(-5,3);      //Перекос температуры масла по моноблокам
+	OilPressLeftRight = Math.Rand(-0.5,0.5); //Перекос давления масла по моноблокам. Возможен засор системы смазки или охлаждения дизеля.	
+	OilTempGMP = MinTemp + Math.Rand(-8, 25);//Температура масла ГМП
+	
+	OilPressStep = (EngineMaxOilPressure - EngineNomOilPressure)/7;
+	OilPressGMPStep = (GMPNomOilPressure - GMPMinOilPressure) / 7;
+
+Interface.Print(MinTemp);	
+}
+
+void SetCoupler(int pos, bool direction)
+{
+	switch(pos)
+	{
+		case 0 :
 		{
-			Interface.Print("МК1 ВКЛ");
-			Sleep (0.7); 
-			me.SetCompressorEfficiency (0.6);
-			Compressor_run = true;
+			SetFXAttachment ("front_couple", SA3_uncouped);
+			SetFXAttachment ("back_couple", SA3_uncouped);
+			break;
 		}
-		if (me.GetEngineParam("main-reservoir-pressure") > 899 and Compressor_run)
+		case 1 :
 		{
-			Interface.Print("МК1 ВЫКЛ");
-			Sleep (0.1); 
-			me.SetCompressorEfficiency (-0.065);
-			Compressor_run = false;
+			if (direction)
+			{
+				SetFXAttachment ("front_couple", SA3_uncouped);
+				SetFXAttachment ("back_couple", SA3_coupled);
+			}
+			else
+			{
+				SetFXAttachment ("front_couple", SA3_coupled);
+				SetFXAttachment ("back_couple", SA3_uncouped);
+			}
+			break;
 		}
-	Sleep (0.001);
+		case 2 :	//// вагон в центре состава
+		{
+			SetFXAttachment ("front_couple", SA3_coupled);
+			SetFXAttachment ("back_couple", SA3_coupled);
+			break;
+		}
+		default :
+		{
+			if (direction)
+			{
+				SetFXAttachment ("front_couple", SA3_coupled);
+				SetFXAttachment ("back_couple", SA3_uncouped);
+			}
+			else
+			{
+				SetFXAttachment ("front_couple", SA3_uncouped);
+				SetFXAttachment ("back_couple", SA3_coupled);
+			}			
+		}
 	}
 }
 
-  // ============================================================================
-  // Math Utility Functions
-  // Desc: Trig functions and stuff.
-  // ============================================================================
+int GetMyNumber(Vehicle[] TrainVehiclesArray)
+{
+	int i=0,ArraySize = TrainVehiclesArray.size();
 
-  public define float PI_2 = 3.14159265/2.0;
+	Vehicle MyVeh=(cast<Vehicle>me);
 
-  float ApproxAtan(float z)
-  {
-      float n1 = 0.97239411;
-      float n2 = -0.19194795;
-      return (n1 + n2 * z * z) * z;
-  }
-
-  float ApproxAtan2(float y, float x)
-  {
-      if (x != 0.0)
-      {
-          if (Math.Fabs(x) > Math.Fabs(y))
-          {
-              float z = y / x;
-              if (x > 0.0)
-              {
-                  // atan2(y,x) = atan(y/x) if x > 0
-                  return ApproxAtan(z);
-              }
-              else if (y >= 0.0)
-              {
-                  // atan2(y,x) = atan(y/x) + PI if x < 0, y >= 0
-                  return ApproxAtan(z) + Math.PI;
-              }
-              else
-              {
-                  // atan2(y,x) = atan(y/x) - PI if x < 0, y < 0
-                  return ApproxAtan(z) - Math.PI;
-              }
-          }
-          else // Use property atan(y/x) = PI/2 - atan(x/y) if |y/x| > 1.
-          {
-              float z = x / y;
-              if (y > 0.0)
-              {
-                  // atan2(y,x) = PI/2 - atan(x/y) if |y/x| > 1, y > 0
-                  return -ApproxAtan(z) + PI_2;
-              }
-              else
-              {
-                  // atan2(y,x) = -PI/2 - atan(x/y) if |y/x| > 1, y < 0
-                  return -ApproxAtan(z) - PI_2;
-              }
-          }
-      }
-      else
-      {
-          if (y > 0.0) // x = 0, y > 0
-          {
-              return PI_2;
-          }
-          else if (y < 0.0) // x = 0, y < 0
-          {
-              return -PI_2;
-          }
-      }
-      return 0.0; // x,y = 0. Could return NaN instead.
-  }
-  define int SINETIMEOUT = 512;
-
-float fast_sin(float in_x)
-  {
-    float x = in_x;
-    //always wrap input angle to -PI..PI
-    if(x and x != 0.0)
-    {
-      int Timeout = 0;
-      if (x < -(float)Math.PI)
-          while(Timeout < SINETIMEOUT and x < -(float)Math.PI)
-          {
-            x = x + (float)Math.PI * 2;
-            Timeout++;
-          }
-      if (x > (float)Math.PI)
-          while(Timeout < SINETIMEOUT and x > (float)Math.PI)
-          {
-            x = x - (float)Math.PI * 2;
-            Timeout++;
-          }
-    }
-
-    if (x < 0)
-    {
-        float sin = (4 / (float)Math.PI) * x + (4 / (float)(Math.PI * Math.PI)) * x * x;
-
-        if (sin < 0)
-            return .225 * (sin * -sin - sin) + sin;
-
-        return .225 * (sin * sin - sin) + sin;
-    }
-    else
-    {
-        float sin = (4 / (float)Math.PI) * x - (4 / (float)(Math.PI * Math.PI)) * x * x;
-
-        if (sin < 0)
-            return .225 * (sin * -sin - sin) + sin;
-
-        return .225 * (sin * sin - sin) + sin;
-    }
-    return 0.0;
-  }
-
-  float fast_cos(float x)
-  {
-    return fast_sin((Math.PI / 2.0) - x);
-  }
-
-  float rad_range(float in_x)
-  {
-    float x = in_x;
-    if(x and x != 0.0)
-    {
-      int Timeout = 0;
-      if (x < -(float)Math.PI)
-          while(Timeout < SINETIMEOUT and x < -(float)Math.PI)
-          {
-            x = x + (float)Math.PI * 2;
-            Timeout++;
-          }
-      if (x > (float)Math.PI)
-          while(Timeout < SINETIMEOUT and x > (float)Math.PI)
-          {
-            x = x - (float)Math.PI * 2;
-            Timeout++;
-          }
-    }
-    return x;
-  }
-
-  WorldCoordinate RotatePoint(WorldCoordinate point, float rotateangle)
-  {
-    WorldCoordinate newpoint = new WorldCoordinate();
-    float s = fast_sin(rotateangle);
-    float c = fast_cos(rotateangle);
-    newpoint.x = point.x * c - point.y * s;
-    newpoint.y = point.x * s + point.y * c;
-    newpoint.z = point.z;
-    return newpoint;
-  }
-  
-  
-  Orientation LookAt(WorldCoordinate A, WorldCoordinate B)
-  {
-    float d_x = B.x - A.x;
-    float d_y = B.y - A.y;
-    float d_z = B.z - A.z;
-    WorldCoordinate delta = new WorldCoordinate();
-    delta.x = d_x;
-    delta.y = d_y;
-    delta.z = d_z;
-
-    Orientation ang = new Orientation();
-    float rot_z = ApproxAtan2(d_y, d_x);
-    ang.rz = rot_z- Math.PI; // - Math.PI
-    WorldCoordinate relative = RotatePoint(delta, -rot_z);
-    ang.ry = ApproxAtan2(relative.z, relative.x);
-    return ang;
-  }
-
-  Orientation DeltaRot(Orientation From, Orientation To)
-  {
-    Orientation ang = new Orientation();
-    ang.rx = To.rx - From.rx;
-    ang.ry = To.ry - From.ry;
-    ang.rz = To.rz - From.rz;
-    return ang;
-  }
-  
-  float clamp(float x, float lower, float upper)
-  {
-    float ret = x;
-    if(ret < lower)
-      ret = lower;
-    else if(ret > upper)
-      ret = upper;
-    return ret;
-  }
-
-  // ============================================================================
-  // Name: SniffMyTrain()
-  // Desc: Поддерживать доступ к текущему поезду для прослушивания сообщений «Train»
-  // ============================================================================
-  void SniffMyTrain()
-  {
-    Train oldTrain = train;
-	  //Interface.Print("I entered Sniff");
-
-    train = GetMyTrain();
-
-    if(oldTrain)
-    {
-      if(oldTrain != train)
-      {
-        Sniff(oldTrain, "Train", "", false);
-        Sniff(train, "Train", "", true);
-      }
-    }
-    else
-    {
-      Sniff(train, "Train", "", true);
-    }
-  }
-  
-   // ============================================================================
-  // Name: ConfigureHeadcodeLamps()
-  // Desc: Sets the lamp arrangement from the headcode variable
-  // Lamp names are fairly self-explanatory, but here is the full name for each lamp:
-  // lamp_tc  = Top Center , lamp_bc = Bottom Center , Lamp_bl = Bottom Left , lamp_br = Bottom Right
-  // ============================================================================
-  void ConfigureHeadcodeLamps(int headcode)
-  {
-    // We are going to use SetFXAttachment to set the lamps in the correct positions.
-    // This is using the names of the lamps that are in the effects container of the locomotive.
-    if ((headcode & HEADCODE_BL) != 0) SetFXAttachment("lamp_bl", headlight_asset);
-    else SetFXAttachment("lamp_bl", null);
-    if ((headcode & HEADCODE_BC) != 0) SetFXAttachment("lamp_bc", headlight_asset);
-    else SetFXAttachment("lamp_bc", null);
-    if ((headcode & HEADCODE_BR) != 0) SetFXAttachment("lamp_br", headlight_asset);
-    else SetFXAttachment("lamp_br", null);
-    if ((headcode & HEADCODE_TC) != 0) SetFXAttachment("lamp_tc", headlight_asset);
-    else SetFXAttachment("lamp_tc", null);
-
-  }
-  
-   // ============================================================================
-  // Name: MultiplayerBroadcast()
-  // Desc: Поток, который объединяет всю информацию о локомотивах с другими клиентами МП.
-  // ============================================================================
-
-  //Этот раздел кода управляет многопользовательской игрой, используя какой-то эпический продвинутый Soup.
-	thread void MultiplayerBroadcast()
-	{
-		while(true)
+	while(i<ArraySize)
 		{
-			//ПРОВЕРЬ ПРАВО СОБСТВЕННОСТИ КЛИЕНТА, ИНАЧЕ БУДЕТ ЗАСОРЕНО
-			DriverCharacter driver = me.GetMyTrain().GetActiveDriver();
-			if (MultiplayerGame.IsActive() and driver and driver.IsLocalPlayerOwner())
-			{
-				//Этот поток будет упаковывать данные и отправлять их на сервер для чтения.
-				Soup senddata = Constructors.NewSoup();
-				senddata.SetNamedTag("headcode",m_buferlights);
-				senddata.SetNamedTag("id",me.GetGameObjectID());
-				MultiplayerGame.BroadcastGameplayMessage("TTTELocomotiveMP", "update", senddata);
-			}
-			Sleep(MP_UpdatePeriod); // Не перебарщивай с данными
+		if(TrainVehiclesArray[i]==MyVeh)
+			return i;
+		i++;
 		}
-	}
-
-  //Online fuctions
-  TTTEOnline GetOnlineLibrary()
-  {
-    if(TTTELocoLibrary)
-      return TTTELocoLibrary.GetOnlineLibrary();
-
-    return null;
-  }
-
-  OnlineGroup GetSocialGroup()
-  {
-    TTTEOnline onlineLibrary = GetOnlineLibrary();
-    return onlineLibrary.GetPersonalGroup();
-  }
-
-  // ============================================================================
-  // Name: MPUpdate()
-  // Desc: Обновление данных на клиентской части
-  // ============================================================================
-
-	//Передаёт и фиксирует сообщения мультиплеера
-	public void MPUpdate(Message msg)
-	{
-		Soup ReceivedData = msg.paramSoup;
-
-		DriverCharacter driver = me.GetMyTrain().GetActiveDriver();
-		if(driver.IsLocalPlayerOwner() == false and me.GetGameObjectID().DoesMatch(ReceivedData.GetNamedTagAsGameObjectID("id"))) //this might not work idk
-		{
-			Interface.Print("Data Confirmed!");
-      int Rheadcode = ReceivedData.GetNamedTagAsInt("headcode");
-
-      if(m_buferlights != Rheadcode)
-      {
-        m_buferlights = Rheadcode;
-        ConfigureHeadcodeLamps(m_buferlights);
-      }
-
-			//bool Rwheesh = ReceivedData.GetNamedTagAsBool("wheesh");
-
-			//if(Rwheesh and !Wheeshing)
-			//{
-			//	PostMessage(me, "pfx", "+4",0.0);
-			//} else if(!Rwheesh and Wheeshing) {
-			//	PostMessage(me, "pfx", "-4",0.0);
-			//}
-		}
-	}
-
 	
+	return 0;
+}
+
+void MyPosition(void)
+{
+	Train MyTrain=me.GetMyTrain();
+	if(MyTrain!=null)
+	{
+		Vehicle[] TrainVehiclesArray = MyTrain.GetVehicles();
+
+		int a=me.GetMyNumber(TrainVehiclesArray);
+ 		int size_of_train=TrainVehiclesArray.size();
+		bool direction = (cast<Vehicle>me).GetDirectionRelativeToTrain();
+
+		if(size_of_train==1)	//вагон одиночный
+		{
+			inFront=null;
+			inBack=null;
+			SetCoupler(0,direction);
+		}
+		
+		else if(a==0)	//// вагонов больше одного, этот вагон находиться первым в составе
+		{
+			inFront=null;
+			inBack=TrainVehiclesArray[1];
+			SetCoupler(1,direction);
+		}
+		else if(a<(size_of_train-1)) //// вагонов больше одного, этот вагон находиться в центре состава
+		{
+			inFront=TrainVehiclesArray[a-1];
+			inBack=TrainVehiclesArray[a+1];
+			SetCoupler(2,direction);
+		}
+		else 				//// вагонов больше одного, этот вагон находиться в конце состава
+		{
+			inFront=TrainVehiclesArray[size_of_train-2];
+			inBack=null;
+			SetCoupler(3,direction);
+		}
+	}
+}
+
+void CoupleHandler(Message msg)
+{
+	if(msg.src==me)
+	{
+		me.MyPosition();
+		//World.PlaySound(MyAsset1, "sound/coupling.wav", 1.0f, 20.0f, 100.0f, me, "a.bog0");
+	}
+}
+
+void DecoupleHandler(Message msg)
+{
+	if(msg.src==me or msg.src==inFront or msg.src==inBack)
+	{
+		me.MyPosition();
+		//World.PlaySound(MyAsset1, "sound/decoupling.wav", 1.0f, 20.0f, 100.0f, me, "a.bog0");
+	}
+}
+
+public void Contactor (bool usl,bool pam,float Voltage,float volume,int numrel,float Resistance)
+{
+	bool rels;
+	if(numrel>0)
+	{
+		if(usl)
+		{
+			Reltoki[numrel]=Voltage/Resistance;
+		}
+		else
+		{
+			Reltoki[numrel]=0;
+		}
+	}
+	
+if(pam and !usl)
+{
+	pam = false; rels = false;
+}
+if(!pam and usl)
+{
+	pam = true; rels = true;
+}
+rels = pam;
+//return rels;
+}
+
+public void Diesel(int state)
+{
+	if (state == 1.f) //Состояние запуска
+	{
+		SetBrokenThrottle(true);
+		starter_timer = starter_timer + 0.1;
+		Sleep(0.005); 
+		PlaySoundScriptEvent("start");
+		PostMessage(me,"pfx","+1",0.1);
+		if (starter_timer >= 0 and starter_timer <= 5.5)
+		{
+			RPM = (sin((starter_timer/1.5)+4.8)+1)*450;
+		}
+		if (starter_timer > 5.5)
+		{
+			PostMessage(me,"pfx","-1",0.6);
+			RPM = RPM - 5;
+			Sleep(0.005);
+			if (RPM <= Idle_RPM)
+			{
+				DieselState = 2.f;
+				starter_timer = 0;
+			}
+		}
+	}
+
+    else if(state == 2.f) //В работе
+	{
+		SetBrokenThrottle(false);
+		PlaySoundScriptEvent("engine");
+		PostMessage(me,"pfx","+0",0.1);
+		Gen_wire = true;
+		SetEngineSetting("throttle",Tyaga);
+	}
+	else if (state == 3.f) //Остановка дизеля
+	{
+		StopSoundScriptEvent("engine");
+		PlaySoundScriptEvent("stop");
+		PostMessage(me,"pfx","-0",0.6);
+		DieselState = 0.f;
+		RPM = 0;
+		Gen_wire = false;
+		SetBrokenThrottle(true);
+	}
+}
+
+void DieselSync(Message msg)
+{
+	if(msg.src==me)
+	{
+
+	}
+}
+
+//*************************************************************************//
+// Generator - для запитывания схемы от генератора дизеля независимо от АБ //
+//*************************************************************************//
+public void Generator(bool in, bool out)
+{
+	if (in and !out)
+		out = true;
+	
+	else if (!in and out)
+		out = false;
+}
+
+void SendMessageToServer(Soup data)
+{
+	MultiplayerGame.SendGameplayMessageToServer("DieselLocomotive", "mult_server", data);
+}
+
+void SendMessagesToClient(Soup data)
+{
+	MultiplayerGame.BroadcastGameplayMessage("DieselLocomotive", "mult_client", data);
+}
+
+public void MultiplayerSync(void)
+{
+	if( !MultiplayerGame.IsServer() )
+		{
+
+		Soup Temp_soup = Constructors.NewSoup();
+
+		Temp_soup.SetNamedTag("DieselState",DieselState);
+
+		SendMessageToServer(Temp_soup);
+
+		Temp_soup.Clear();
+		Temp_soup = null;
+
+		return;
+		}
+}
+
+public void Init(void)
+{
+	inherited();
+	SetBrokenThrottle(true);
+	AddHandler(me, "World", "ModuleInit", "Setup");
+	SA3_coupled	= me.GetAsset().FindAsset("SA3-coupled");
+	SA3_uncouped = me.GetAsset().FindAsset("SA3-uncoupled");
+	me.AddHandler(me,"Vehicle","Coupled","CoupleHandler");
+	me.AddHandler(me,"Vehicle","Decoupled","DecoupleHandler");
+	me.PostMessage(me,"Vehicle","Coupled",0.8); 
+	AddHandler(me, "DieselLocomotive", "mult_client", "DieselSync");
+}
 };
